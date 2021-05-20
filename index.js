@@ -6,9 +6,11 @@ const { get } = require('http');
 const configPath = 'config.json';
 const hoferPath = 'hofer.json';
 const modsPath = 'mods.json';
+const hoferChannelPath = 'hoferChannel.json'
 const devId = '175177376026722304';
+const guildId = '231113242750091265';
 
-const regexCommandSilenceHofer = /^\!sh\s+silence\s+\w+$/;
+const regexCommandSilenceHofer = /^\!sh\s+silence\s+.+$/;
 const regexCommandWho = /^\!sh\s+who$/;
 const regexCommandRemoveHofer = /^!sh remove$/;
 const regexCommandAddMod = /^!sh\s+mods\s+add\s+.+$/
@@ -25,15 +27,28 @@ function replyToUser(msg, reply) {
     client.channels.cache.get(msg.channel.id).send(reply);
 }
 
-function changeHofer(msg) {
-    let hofer = msg.content.replace(/^\!sh\s+silence\s+/,'');
-    fs.writeFileSync(hoferPath, JSON.stringify({"hofer": hofer}));
-    replyToUser(msg, `**${hofer}** is now the hofer`)
+function setHofer(msg) {
+    let hoferUsername = msg.content.replace(/^\!sh\s+silence\s+/,'');
+    let hoferId = getUserId(hoferUsername);
+    fs.writeFileSync(hoferPath, JSON.stringify({"hofer": hoferId}));
+    replyToUser(msg, `**${hoferUsername}** is now the hofer`)
+}
+
+function setHoferChannel(channelId) {
+    fs.writeFileSync(hoferChannelPath, JSON.stringify({"hoferChannel": channelId}));
+}
+
+function getHoferChannel() {
+    let rawdata = fs.readFileSync(hoferChannelPath);
+    return (JSON.parse(rawdata)).hoferChannel;
 }
 
 function getHofer() {
-    let rawdata = fs.readFileSync(hoferPath);
-    return (JSON.parse(rawdata)).hofer;
+    if(fs.existsSync(hoferPath)) {
+        let rawdata = fs.readFileSync(hoferPath);
+        return (JSON.parse(rawdata)).hofer;
+    }
+    return null;
 }
 
 function getMods() {
@@ -50,13 +65,24 @@ function getMods() {
     return mods;
 }
 
-function getUserId(username) {
-    return (client.users.cache.find(user => user.username === username)).id;
+function getUserId(nickname) {
+    let guild = client.guilds.cache.get(guildId); // Getting the guild.
+    let member = guild.members.cache.find(user => user.nickname === nickname); // Getting the member.
+
+    if(typeof member !== 'undefined') {
+        return member.user.id;
+    }
+    return null;
 }
 
 function addMod(msg, modUsername) {
     let mods;
     let modId = getUserId(modUsername);
+
+    if(modId === null) {
+        replyToUser(msg, `No such user **${modUsername}**`)
+        return;
+    }
     
     if (fs.existsSync(modsPath)) {
         mods = getMods();
@@ -71,13 +97,17 @@ function addMod(msg, modUsername) {
         mods = [modId];
     }
     
-    let modsString = 
-    fs.writeFileSync(modsPath, JSON.stringify({"mods": mods}));
+    fs.writeFileSync(modsPath, JSON.stringify({"Mods": mods}));
     replyToUser(msg, `**${modUsername}** has been added to mods`);
 }
 
 function removeMod(msg, modUsername) {
     let modId = getUserId(modUsername);
+
+    if(modId === null) {
+        replyToUser(msg, `No such user **${modUsername}**`)
+        return;
+    }
 
     if (fs.existsSync(modsPath)) {
         let mods = getMods();
@@ -112,6 +142,13 @@ function isMod(userId) {
     return false;
 }
 
+function talk(voiceChannel) {
+    voiceChannel.join().then(connection =>{
+        connection.play('donnie_thornberry.mp3');
+    }).catch(err => console.log(err));
+}
+
+
 config = getConfig();
 const client = new Discord.Client();
 
@@ -122,7 +159,7 @@ client.once('ready', () => {
 client.on('message', msg => {
     if(msg.content.match(regexCommandSilenceHofer)) {
         if(isMod(msg.author.id)) {
-            changeHofer(msg);
+            setHofer(msg);
         } else {
             replyToUser(msg, "you are not a mod");
         }
@@ -130,9 +167,14 @@ client.on('message', msg => {
 
     if(msg.content.match(regexCommandRemoveHofer)) {
         if(isMod(msg.author.id)) {
-            let hofer = getHofer();
-            fs.unlinkSync(hoferPath);
-            replyToUser(msg, `**${hofer}** finally stopped hofering`);
+            if(fs.existsSync(hoferPath)) {
+                let hoferId = getHofer();
+                let hoferUsername = msg.guild.members.cache.get(hoferId).user.username;
+                fs.unlinkSync(hoferPath);
+                replyToUser(msg, `**${hoferUsername}** finally stopped hofering`);
+            } else {
+                replyToUser(msg, "No one is hofering now thank god");
+            }
         } else {
             replyToUser(msg, "you are not a mod");
         }
@@ -172,24 +214,36 @@ client.on('message', msg => {
 
     if(msg.content.match(regexCommandWho)) {
         if(fs.existsSync(hoferPath)) {
-            let hofer = getHofer();
-            replyToUser(msg, `**${hofer}** is hofering everybody`);
+            let hoferId = getHofer();
+            let hoferUsername = msg.guild.members.cache.get(hoferId).user.username;
+            replyToUser(msg, `**${hoferUsername}** is hofering everybody`);
         } else {
             replyToUser(msg, "No one is hofering now thank god");
         }
     }
 })
 
+client.on("voiceStateUpdate", (oldState, newState) => {
+    const hoferId = getHofer();
 
+    if(newState.id === hoferId) {
+        const channel = client.channels.cache.get(newState.channelID);
 
+        if(channel !== 'undefined') {
+            channel.join();
+            setHoferChannel(newState.channelID);
+        }
+    }
+});
 
+client.on('guildMemberSpeaking', (member, speaking) => {
+    const hoferId = getHofer();
 
-
-
-
-
-
-
-
+    if (member.id === hoferId && speaking) {
+        const Guild = client.guilds.cache.get(guildId); // Getting the guild.
+        const Member = Guild.members.cache.get(hoferId); // Getting the member.
+        talk(Member.voice.channel);
+    }
+});
 
 client.login(config.token);
